@@ -52,68 +52,98 @@ class PhysicalObject:
         self.color = color
         self.type = type
 
-        self.velX = 0
-        self.velY = 0
+        self.v = pygame.Vector2()
+        self.moving = self.v.magnitude() > 0.001
 
     def draw(self, surf):
         pygame.draw.circle(surf, self.color, (self.x, self.y), self.size)
 
     def updatePos(self):
-        self.x += self.velX
-        self.y += self.velY
+        self.x += self.v.x
+        self.y += self.v.y
 
-        self.velX *= RESISTANCE
-        self.velY *= RESISTANCE
+        self.v *= RESISTANCE
+
+        self.moving = self.v.magnitude() > 0.001
 
     # does NOT check for collision, only handles it
     def handleCollision(self, other):
-        # we handle the moving object differently from the stationary object :skull:
-        if (self.velX, self.velY) == (0, 0):
-            a = self
-            b = other
-        else:
-            a = other
-            b = self
-        # if two moving objects collide then the physics will die but is okay!
+        # detect if they're inside each other first ---------------------
+        ang = angle(other.x, other.y, self.x, self.y)
+        radii = self.size+other.size
+        xDist, yDist = radii*np.cos(ang) - (self.x-other.x), radii*np.sin(ang) - (self.y-other.y)
+        self.x += xDist/2
+        self.y += yDist/2
+        other.x -= xDist/2
+        other.y -= yDist/2
 
-        # define initial values
-        velAX, velAY = a.velX, a.velY
-        #velBX, velBY = other.velX, other.velY
-        collisionAngle = angle(a.x, a.y, b.x, b.y)
+        # collision physics ---------------------
+        selfPrevAngle = self.v.as_polar()[1]
+        otherPrevAngle = other.v.as_polar()[1]
+        # calculate "surface" at which they collide
+        normalVSelf = pygame.math.Vector2(0.001, 0)
+        normalVSelf.rotate(np.atan2(self.y-other.y, self.x-other.x))
+        normalVOther = normalVSelf.rotate(180) # flip 180 as the collision is opposite for other
 
-        # -------- angle calculation
-        # with other object mass = 0, new velocity direction doesn't change
-        # with other object mass = inf, new velocity direction reflects off other object
-        aOriginalAngle = angle(velAX, velAY, 0, 0)
-        aMaxAngle = np.pi+collisionAngle+(collisionAngle-aOriginalAngle)
-        angleDiff = aMaxAngle-aOriginalAngle
-        aFinalAngle = aOriginalAngle + (-1/(b.mass/a.mass) + 1)*angleDiff
+        # if not moving, set initial angle to perpendicular facing into surface
+        if not self.moving:
+            self.v = normalVSelf.rotate(180)
+        if not other.moving:
+            other.v = normalVOther.rotate(180)
 
-        # -------- magnitude calculation
-        # the more directly it hits the other object, the less velocity it keeps & the more it transfers
-        aMagnitude = abs(collisionAngle-aOriginalAngle)/np.pi * 5 * b.mass/a.mass * RESISTANCE
-        bMagnitude = abs(aMagnitude-xyToVector(a.velX,a.velY)[0]) * 1.5 * a.mass/b.mass * RESISTANCE
+        # apply collision angle
+        selfNewAngle = self.v.reflect(normalVSelf).as_polar()[1]
+        otherNewAngle = other.v.reflect(normalVOther).as_polar()[1]
 
-        a.velX, a.velY = vectorToXY(aMagnitude, aFinalAngle)
-        b.velX, b.velY = vectorToXY(bMagnitude, collisionAngle)
+        # apply collision magnitude
+        selfRatio = np.log10(self.mass/other.mass+1)
+        otherRatio = np.log10(other.mass/self.mass+1)
+        # new magnitude is based on: current magnitude; angle of collision * mass ratio * other's magnitude
+        angleDiff = np.abs(otherPrevAngle-self.v.as_polar()[1])
+        #selfNewMagnitude = self.v.magnitude()*0.5*self.mass/other.mass + angleDiff/180 * other.mass/self.mass * other.v.magnitude()*0.35
+        selfNewMagnitude = (self.v.magnitude() * 0.8) + (angleDiff/180 * other.v.magnitude() * otherRatio)
+        selfNewMagnitude = min(selfNewMagnitude, MAX_VEL) # limit magnitude to max
+        self.v.from_polar((selfNewMagnitude, selfNewAngle)) # set the final new vel
+
+        oAngleDiff = np.abs(selfPrevAngle-other.v.as_polar()[1])
+        #otherNewMagnitude = other.v.magnitude()*0.5*other.mass/self.mass + oAngleDiff/180 * self.mass/other.mass * self.v.magnitude()*0.35
+        otherNewMagnitude = (other.v.magnitude() * 0.8) + (oAngleDiff/180 * self.v.magnitude() * selfRatio)
+        otherNewMagnitude = min(otherNewMagnitude, MAX_VEL)
+        other.v.from_polar((otherNewMagnitude, otherNewAngle))
     
     # detects and handles collision with the wall
     def handleWallCollision(self):
         # field walls
-        # left/right, take into account goal
-        if (self.x-self.size < X_GAP or self.x+self.size > X_GAP+FIELD_WIDTH) and (self.y-self.size < GOAL_TOP or self.y+self.size > GOAL_BOTTOM):
-            self.velX = -self.velX
-        # top/bottom
-        if (self.y-self.size < Y_GAP or self.y+self.size > Y_GAP+FIELD_HEIGHT):
-            self.velY = -self.velY
+        if (self.y-self.size < Y_GAP): # top
+            self.v.y = -self.v.y
+            self.y = Y_GAP + self.size
+        if (self.y+self.size > Y_GAP+FIELD_HEIGHT): # bottom
+            self.v.y = -self.v.y
+            self.y = Y_GAP + FIELD_HEIGHT - self.size
+        # take into account the goal for left/right
+        if (self.y-self.size < GOAL_TOP or self.y+self.size > GOAL_BOTTOM):
+            if (self.x-self.size < X_GAP): # left
+                self.v.x = -self.v.x # reflect velocity horizontally
+                self.x = X_GAP + self.size # move it out of the wall
+            if (self.x+self.size > X_GAP+FIELD_WIDTH): # right
+                self.v.x = -self.v.x
+                self.x = X_GAP + FIELD_WIDTH - self.size
         
         # goal walls
-        # back walls
-        if (self.x-self.size < LEFT_GOAL_BACK or self.x+self.size > RIGHT_GOAL_BACK):
-            self.velX = -self.velX
-        # top/bottom walls, take into account object has to be inside goal
-        if (self.y-self.size < GOAL_TOP or self.y+self.size > GOAL_BOTTOM) and (self.x < X_GAP or self.x > X_GAP + FIELD_WIDTH):
-            self.velY = -self.velY
+        if (self.x-self.size < LEFT_GOAL_BACK): # left goal back
+            self.v.x = -self.v.x
+            self.x = LEFT_GOAL_BACK + self.size
+        if (self.x+self.size > RIGHT_GOAL_BACK): # right goal back
+            self.v.x = -self.v.x
+            self.x = RIGHT_GOAL_BACK - self.size
+        # take into account object has to be inside goal
+        if (self.x < X_GAP or self.x > X_GAP + FIELD_WIDTH):
+            if (self.y-self.size < GOAL_TOP): # goal top
+                self.v.y = -self.v.y
+                self.y = GOAL_TOP + self.size
+            if (self.y+self.size > GOAL_BOTTOM): # goal bottom
+                self.v.y = -self.v.y
+                self.y = GOAL_BOTTOM - self.size
 
 
 class Player(PhysicalObject):
@@ -154,10 +184,12 @@ def vectorToXY(magnitude, direction):
 
 def spawnGrenade(objects, x, y):
     for i in range(0, 8):
-        angle = np.pi*i/4
-        velX, velY = vectorToXY(FRAG_VEL, angle)
         frag = Fragment(x, y, FRAG_MASS, FRAG_SIZE, BLACK)
-        frag.velX, frag.velY = velX, velY
+        vel = pygame.math.Vector2()
+        vel.scale_to_length(FRAG_VEL)
+        vel.rotate_rad_ip(np.pi*i/4)
+        frag.v = vel
+        
         objects.append(frag)
 
 def main():
@@ -199,7 +231,7 @@ def main():
         if scored:
             stoppedMoving = True
             for obj in objects:
-                if obj.velX > 0.001 or obj.velY > 0.001:
+                if obj.v.magnitude() > 0.001:
                     stoppedMoving = False
                     break
             
@@ -247,21 +279,30 @@ def main():
                 # on unclick, check if anything's selected
                 # if so, check if the cursor's outside the player
                 if selected and distance(mouseX, mouseY, selected.x, selected.y) > PLAYER_SIZE: # THANKS ALEX
-                    # Calculate the drag distance (difference between release and starting point)
-                    deltaX = mouseX - startingX
-                    deltaY = mouseY - startingY
+                    # # Calculate the drag distance (difference between release and starting point)
+                    # deltaX = mouseX - startingX
+                    # deltaY = mouseY - startingY
                 
-                    # Calculate the velocity to be applied based on the drag distance
-                    aimX = deltaX / AIM_TWEAK
-                    aimY = deltaY / AIM_TWEAK
+                    # # Calculate the velocity to be applied based on the drag distance
+                    # aimX = deltaX / AIM_TWEAK
+                    # aimY = deltaY / AIM_TWEAK
 
-                    # Limit the velocity to MAX_VEL
-                    magnitude = min(np.sqrt(aimX**2 + aimY**2), MAX_VEL)
-                    direction = np.atan2(aimY, aimX)
+                    # # Limit the velocity to MAX_VEL
+                    # magnitude = min(np.sqrt(aimX**2 + aimY**2), MAX_VEL)
+                    # direction = np.atan2(aimY, aimX)
 
-                    # Apply the velocity
-                    selected.velX = -magnitude * np.cos(direction)
-                    selected.velY = -magnitude * np.sin(direction)
+                    # # Apply the velocity
+                    # selected.velX = -magnitude * np.cos(direction)
+                    # selected.velY = -magnitude * np.sin(direction)
+
+                    # calculate drag distance, applying a slight tweak
+                    vel = pygame.math.Vector2(-(mouseX-startingX)/AIM_TWEAK, -(mouseY-startingY)/AIM_TWEAK)
+                    
+                    # limit velocity to MAX_VEL
+                    if vel.magnitude_squared() > MAX_VEL**2: # can use vel.clamp_magnitude_ip(), but is experimental
+                        vel.scale_to_length(MAX_VEL)
+                    
+                    selected.v = vel
 
                     player.hovered = False
                     selected = None
@@ -281,11 +322,11 @@ def main():
             # update twice to handle goal corners!
             obj.handleWallCollision()
             obj.updatePos()
-            obj.handleWallCollision()
-            obj.updatePos()
+#            obj.handleWallCollision()
+#            obj.updatePos()
 
             if (obj.type == "frag"):
-                if (obj.velX < 0.001 and obj.velY < 0.001):
+                if (obj.v.magnitude() < 0.001):
                     fragsToRemove.append(obj)
         
         for frag in fragsToRemove:
