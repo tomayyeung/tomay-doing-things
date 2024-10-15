@@ -1,4 +1,4 @@
-import pygame, sys, random
+import pygame, sys
 import pygame.locals
 import numpy as np
 
@@ -31,14 +31,16 @@ BALL_MASS = 8
 BALL_SIZE = 10
 PLAYER_MASS = 30
 PLAYER_SIZE = 20
+FRAG_COUNT = 16
 FRAG_MASS = 15
 FRAG_SIZE = 3
-MAX_FRAG_SIZE = 10
-FRAG_VEL = FPS * 0.45
+FRAG_VEL = FPS * 0.5
+FRAG_LIFETIME = 250 # milliseconds
 SELECTED_THICKNESS = 5
-MAX_VEL = FPS*0.2 # yo idk what these numbers mean don't ask about units lmao
+MAX_VEL = FPS*0.2
 AIM_TWEAK = 10 # smaller number = less difference bt big aim and small aim
-RESISTANCE = 0.97 # throw this onto stuff to simulate friction/air resistance/physics??
+FRICTION = 0.97
+RESTITUTION = 0.8 # bounciness
 
 SPAWNS = ((FIELD_WIDTH/5, FIELD_HEIGHT/3), (FIELD_WIDTH/5,FIELD_HEIGHT*2/3), (FIELD_WIDTH/3, FIELD_HEIGHT/2))
 
@@ -52,97 +54,110 @@ class PhysicalObject:
         self.color = color
         self.type = type
 
-        self.v = pygame.Vector2()
-        self.moving = self.v.magnitude() > 0.001
+        self.v = np.zeros(2, dtype=np.float64)
+        self.moving = np.linalg.norm(self.v) > 0.001
 
     def draw(self, surf):
         pygame.draw.circle(surf, self.color, (self.x, self.y), self.size)
 
     def updatePos(self):
-        self.x += self.v.x
-        self.y += self.v.y
+        self.x += self.v[0]
+        self.y += self.v[1]
 
-        self.v *= RESISTANCE
+        self.v *= FRICTION
 
-        self.moving = self.v.magnitude() > 0.001
+        self.moving = np.linalg.norm(self.v) > 0.001
 
     # does NOT check for collision, only handles it
-    def handleCollision(self, other):
-        # detect if they're inside each other first ---------------------
-        ang = angle(other.x, other.y, self.x, self.y)
-        radii = self.size+other.size
-        xDist, yDist = radii*np.cos(ang) - (self.x-other.x), radii*np.sin(ang) - (self.y-other.y)
-        self.x += xDist/2
-        self.y += yDist/2
-        other.x -= xDist/2
-        other.y -= yDist/2
-
-        # collision physics ---------------------
-        selfPrevAngle = self.v.as_polar()[1]
-        otherPrevAngle = other.v.as_polar()[1]
-        # calculate "surface" at which they collide
-        normalVSelf = pygame.math.Vector2(0.001, 0)
-        normalVSelf.rotate(np.atan2(self.y-other.y, self.x-other.x))
-        normalVOther = normalVSelf.rotate(180) # flip 180 as the collision is opposite for other
-
-        # if not moving, set initial angle to perpendicular facing into surface
-        if not self.moving:
-            self.v = normalVSelf.rotate(180)
-        if not other.moving:
-            other.v = normalVOther.rotate(180)
-
-        # apply collision angle
-        selfNewAngle = self.v.reflect(normalVSelf).as_polar()[1]
-        otherNewAngle = other.v.reflect(normalVOther).as_polar()[1]
-
-        # apply collision magnitude
-        selfRatio = np.log10(self.mass/other.mass+1)
-        otherRatio = np.log10(other.mass/self.mass+1)
-        # new magnitude is based on: current magnitude; angle of collision * mass ratio * other's magnitude
-        angleDiff = np.abs(otherPrevAngle-self.v.as_polar()[1])
-        #selfNewMagnitude = self.v.magnitude()*0.5*self.mass/other.mass + angleDiff/180 * other.mass/self.mass * other.v.magnitude()*0.35
-        selfNewMagnitude = (self.v.magnitude() * 0.8) + (angleDiff/180 * other.v.magnitude() * otherRatio)
-        selfNewMagnitude = min(selfNewMagnitude, MAX_VEL) # limit magnitude to max
-        self.v.from_polar((selfNewMagnitude, selfNewAngle)) # set the final new vel
-
-        oAngleDiff = np.abs(selfPrevAngle-other.v.as_polar()[1])
-        #otherNewMagnitude = other.v.magnitude()*0.5*other.mass/self.mass + oAngleDiff/180 * self.mass/other.mass * self.v.magnitude()*0.35
-        otherNewMagnitude = (other.v.magnitude() * 0.8) + (oAngleDiff/180 * self.v.magnitude() * selfRatio)
-        otherNewMagnitude = min(otherNewMagnitude, MAX_VEL)
-        other.v.from_polar((otherNewMagnitude, otherNewAngle))
+    def handleCollision(self, other): # THANKS ALEX
+        # Calculate the vector between the objects
+        delta = np.array([self.x - other.x, self.y - other.y])
+        distance = np.linalg.norm(delta)
+        
+        # Calculate overlap
+        overlap = self.size + other.size - distance
+        
+        if overlap > 0:
+            # Normalize the delta vector
+            normal = delta / distance
+            
+            # Separate the objects
+            separation = overlap * normal * 0.5
+            self.x += separation[0]
+            self.y += separation[1]
+            other.x -= separation[0]
+            other.y -= separation[1]
+            
+            # Calculate relative velocity
+            relative_velocity = self.v - other.v
+            
+            # Calculate velocity along the normal
+            velocity_along_normal = np.dot(relative_velocity, normal)
+            
+            # Do not resolve if velocities are separating
+            if velocity_along_normal > 0:
+                return
+            
+            # Calculate impulse scalar
+            impulse_scalar = -(1 + RESTITUTION) * velocity_along_normal
+            impulse_scalar /= 1/self.mass + 1/other.mass
+            
+            # Apply impulse
+            impulse = impulse_scalar * normal
+            self.v += impulse / self.mass
+            other.v -= impulse / other.mass
+            
+            # Apply friction
+            friction_coefficient = 0.15  # You can adjust this value
+            tangent = np.array([-normal[1], normal[0]])
+            friction_impulse_scalar = np.dot(relative_velocity, tangent) * friction_coefficient
+            friction_impulse_scalar /= 1/self.mass + 1/other.mass
+            
+            # Ensure friction doesn't reverse velocity
+            if friction_impulse_scalar < 0:
+                friction_impulse = friction_impulse_scalar * tangent
+            else:
+                friction_impulse = -friction_impulse_scalar * tangent
+            
+            self.v += friction_impulse / self.mass
+            other.v -= friction_impulse / other.mass
+            
+            # Limit velocities to MAX_VEL
+            self.v = np.clip(self.v, -MAX_VEL, MAX_VEL)
+            other.v = np.clip(other.v, -MAX_VEL, MAX_VEL)
     
     # detects and handles collision with the wall
     def handleWallCollision(self):
         # field walls
         if (self.y-self.size < Y_GAP): # top
-            self.v.y = -self.v.y
+            self.v[1] = -self.v[1]
             self.y = Y_GAP + self.size
         if (self.y+self.size > Y_GAP+FIELD_HEIGHT): # bottom
-            self.v.y = -self.v.y
+            self.v[1] = -self.v[1]
             self.y = Y_GAP + FIELD_HEIGHT - self.size
         # take into account the goal for left/right
         if (self.y-self.size < GOAL_TOP or self.y+self.size > GOAL_BOTTOM):
             if (self.x-self.size < X_GAP): # left
-                self.v.x = -self.v.x # reflect velocity horizontally
+                self.v[0] = -self.v[0] # reflect velocity horizontally
                 self.x = X_GAP + self.size # move it out of the wall
             if (self.x+self.size > X_GAP+FIELD_WIDTH): # right
-                self.v.x = -self.v.x
+                self.v[0] = -self.v[0]
                 self.x = X_GAP + FIELD_WIDTH - self.size
         
         # goal walls
         if (self.x-self.size < LEFT_GOAL_BACK): # left goal back
-            self.v.x = -self.v.x
+            self.v[0] = -self.v[0]
             self.x = LEFT_GOAL_BACK + self.size
         if (self.x+self.size > RIGHT_GOAL_BACK): # right goal back
-            self.v.x = -self.v.x
+            self.v[0] = -self.v[0]
             self.x = RIGHT_GOAL_BACK - self.size
         # take into account object has to be inside goal
         if (self.x < X_GAP or self.x > X_GAP + FIELD_WIDTH):
             if (self.y-self.size < GOAL_TOP): # goal top
-                self.v.y = -self.v.y
+                self.v[1] = -self.v[1]
                 self.y = GOAL_TOP + self.size
             if (self.y+self.size > GOAL_BOTTOM): # goal bottom
-                self.v.y = -self.v.y
+                self.v[1] = -self.v[1]
                 self.y = GOAL_BOTTOM - self.size
 
 
@@ -159,10 +174,11 @@ class Player(PhysicalObject):
 class Fragment(PhysicalObject):
     def __init__(self, x, y, mass, size, color):
         super().__init__(x, y, mass, size, color, "frag")
+        self.spawnTime = pygame.time.get_ticks()
 
     def updatePos(self):
-        if self.size < MAX_FRAG_SIZE:
-            self.size += 1
+        #if self.size < MAX_FRAG_SIZE:
+        #    self.size += 1
         super().updatePos()
         
 # ---------------------- define functions
@@ -183,11 +199,9 @@ def vectorToXY(magnitude, direction):
     return x, y
 
 def spawnGrenade(objects, x, y):
-    for i in range(0, 8):
+    for i in range(0, FRAG_COUNT):
         frag = Fragment(x, y, FRAG_MASS, FRAG_SIZE, BLACK)
-        vel = pygame.math.Vector2()
-        vel.scale_to_length(FRAG_VEL)
-        vel.rotate_rad_ip(np.pi*i/4)
+        vel = np.array(vectorToXY(FRAG_VEL, np.pi*i/(FRAG_COUNT/2)))
         frag.v = vel
         
         objects.append(frag)
@@ -203,35 +217,24 @@ def main():
     displayFont = pygame.font.SysFont("krungthep", 80)
     scoreFont = pygame.font.SysFont("menlo", 30)
 
-    # create objects
-    # ball = PhysicalObject(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, BALL_MASS, BALL_SIZE, WHITE)
-    # objects = [ball]
-    # for spawn in SPAWNS:
-    #     objects.append(Player(X_GAP + spawn[0], Y_GAP + spawn[1], BLUE))
-    #     objects.append(Player(SCREEN_WIDTH - X_GAP - spawn[0], Y_GAP + spawn[1], RED))
-
-    # freshObjects = objects.copy()
-
-    # players = objects[1:]
     objects = []
 
     blueScore = 0
     redScore = 0
-    scored = True
+    scored = True # start at True to set inital object positions
 
     selected = None
-    startingX, startingY, = 0,0
+    startingX, startingY = 0,0
 
-    #aimX = 0
-    #aimY = 0
     turn = BLUE
+    nothingMoving = True
     while 1:
-        
+        # handle scored -----------------------
         # let it run until everything stops moving, then reset
         if scored:
             stoppedMoving = True
             for obj in objects:
-                if obj.v.magnitude() > 0.001:
+                if obj.moving:
                     stoppedMoving = False
                     break
             
@@ -242,14 +245,12 @@ def main():
                     objects.append(Player(X_GAP + spawn[0], Y_GAP + spawn[1], BLUE))
                     objects.append(Player(SCREEN_WIDTH - X_GAP - spawn[0], Y_GAP + spawn[1], RED))
 
-                #freshObjects = objects.copy()
-
                 players = objects[1:]
                 
                 scored = False
                 continue
 
-        # handle input
+        # handle input -----------------------
         # hold click & drag to aim
         mouseX, mouseY = pygame.mouse.get_pos()
         for event in pygame.event.get():
@@ -259,11 +260,10 @@ def main():
 
             if event.type == pygame.locals.KEYDOWN:
                 if event.key == pygame.locals.K_a:
-                    #spawnGrenade(objects, random.randint(X_GAP, X_GAP + FIELD_WIDTH), random.randint(Y_GAP, Y_GAP+FIELD_HEIGHT))
                     spawnGrenade(objects, mouseX, mouseY)
             
             
-            if event.type == pygame.locals.MOUSEBUTTONDOWN:
+            if event.type == pygame.locals.MOUSEBUTTONDOWN and nothingMoving:
                 # on click, check if anything's selected
                 # if not, check the cursor is on any player to mark it as selected
                 if selected is None:
@@ -278,23 +278,7 @@ def main():
             if event.type == pygame.locals.MOUSEBUTTONUP:
                 # on unclick, check if anything's selected
                 # if so, check if the cursor's outside the player
-                if selected and distance(mouseX, mouseY, selected.x, selected.y) > PLAYER_SIZE: # THANKS ALEX
-                    # # Calculate the drag distance (difference between release and starting point)
-                    # deltaX = mouseX - startingX
-                    # deltaY = mouseY - startingY
-                
-                    # # Calculate the velocity to be applied based on the drag distance
-                    # aimX = deltaX / AIM_TWEAK
-                    # aimY = deltaY / AIM_TWEAK
-
-                    # # Limit the velocity to MAX_VEL
-                    # magnitude = min(np.sqrt(aimX**2 + aimY**2), MAX_VEL)
-                    # direction = np.atan2(aimY, aimX)
-
-                    # # Apply the velocity
-                    # selected.velX = -magnitude * np.cos(direction)
-                    # selected.velY = -magnitude * np.sin(direction)
-
+                if selected and distance(mouseX, mouseY, selected.x, selected.y) > PLAYER_SIZE:
                     # calculate drag distance, applying a slight tweak
                     vel = pygame.math.Vector2(-(mouseX-startingX)/AIM_TWEAK, -(mouseY-startingY)/AIM_TWEAK)
                     
@@ -315,18 +299,21 @@ def main():
                 else:
                     player.hovered = False
                     selected = None
-
+        
+        # update game -----------------------
         fragsToRemove = []
+        nothingMoving = True
         # check for wall collision
         for obj in objects:
-            # update twice to handle goal corners!
+            if obj.moving:
+                nothingMoving = False
+            # update twice to handle goal corners
             obj.handleWallCollision()
             obj.updatePos()
-#            obj.handleWallCollision()
-#            obj.updatePos()
 
             if (obj.type == "frag"):
-                if (obj.v.magnitude() < 0.001):
+                #if (not obj.moving):
+                if (pygame.time.get_ticks()-obj.spawnTime > FRAG_LIFETIME):
                     fragsToRemove.append(obj)
         
         for frag in fragsToRemove:
@@ -339,7 +326,7 @@ def main():
                 if distance(obj1.x, obj1.y, obj2.x, obj2.y) <= obj1.size+obj2.size:
                     obj1.handleCollision(obj2)
         
-        # display
+        # display -----------------------
         DISPLAYSURF.fill(GREEN)
         pygame.draw.rect(DISPLAYSURF, WHITE, pygame.Rect(X_GAP, Y_GAP, FIELD_WIDTH, FIELD_HEIGHT), 1) # field lines
         pygame.draw.rect(DISPLAYSURF, BLUE, pygame.Rect(LEFT_GOAL_BACK, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT), 1) # left goal
@@ -353,6 +340,15 @@ def main():
         if selected:
             pygame.draw.line(DISPLAYSURF, WHITE, (selected.x, selected.y), (mouseX, mouseY), SELECTED_THICKNESS)
         
+        # show turn
+        if nothingMoving and not scored:
+            if turn == BLUE:
+                turnText = scoreFont.render("Blue Turn", True, BLUE)
+            if turn == RED:
+                turnText = scoreFont.render("Red Turn", True, RED)
+            turnTextRect = turnText.get_rect(midtop=(SCREEN_WIDTH/2, 0))
+            DISPLAYSURF.blit(turnText, turnTextRect)
+            
         # detect for scoring
         if (ball.x < X_GAP and not scored):
             displayText = displayFont.render("RED SCORE", True, WHITE)
@@ -369,10 +365,10 @@ def main():
             turn = RED
             scoreTime = pygame.time.get_ticks()
         
-        if scored and scoreTime > 5000: # keep SCORED text on at least 5 seconds after score
+        if scored and pygame.time.get_ticks() - scoreTime < 5000: # keep SCORED text on 5 seconds after score
             DISPLAYSURF.blit(displayText, displayTextRect)
 
-
+        # show score for blue & red
         DISPLAYSURF.blit(scoreFont.render("Blue score: " + str(blueScore), True, BLUE), (0,0))
         redScoreText = scoreFont.render("Red score: " + str(redScore), True, RED)
         redScoreRect = redScoreText.get_rect(topright = (SCREEN_WIDTH, 0))
