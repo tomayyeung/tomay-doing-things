@@ -1,5 +1,3 @@
-x = 2
-y=3
+import numpy as np
 
-if (x,y) == (2,3):
-    print("here")
+print(np.atan2(4, 5))
