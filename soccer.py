@@ -15,8 +15,10 @@ RED = (255, 0, 0)
 WHITE = (255, 255, 255)
 YELLOW = (190, 190, 0)
 BLACK = (0, 0, 0)
+TRANSPARENT_BLACK = (0, 0, 0, 185)
 
 # game constants
+# field
 FIELD_WIDTH = 600
 FIELD_HEIGHT = 400
 X_GAP = (SCREEN_WIDTH-FIELD_WIDTH)/2
@@ -27,22 +29,33 @@ GOAL_TOP = Y_GAP+FIELD_HEIGHT/2-GOAL_HEIGHT/2
 GOAL_BOTTOM = GOAL_TOP+GOAL_HEIGHT
 LEFT_GOAL_BACK = X_GAP-GOAL_DEPTH
 RIGHT_GOAL_BACK = SCREEN_WIDTH-X_GAP+GOAL_DEPTH
+# ball
 BALL_MASS = 8
 BALL_SIZE = 10
 PLAYER_MASS = 30
 PLAYER_SIZE = 20
+# grenade powerup
+GRENADE_SIZE = 15 # during powerup select
 FRAG_COUNT = 16
 FRAG_MASS = 15
 FRAG_SIZE = 3
 FRAG_VEL = FPS * 0.5
-FRAG_LIFETIME = 250 # milliseconds
-SELECTED_THICKNESS = 5
+FRAG_LIFETIME = 120 # milliseconds
+# physics
 MAX_VEL = FPS*0.2
 AIM_TWEAK = 10 # smaller number = less difference bt big aim and small aim
 FRICTION = 0.97
 RESTITUTION = 0.8 # bounciness
-
+# buttons
+ICON_SIZE = 64
+BUTTON_GAP = Y_GAP/2
+# misc
+SELECTED_THICKNESS = 5
 SPAWNS = ((FIELD_WIDTH/5, FIELD_HEIGHT/3), (FIELD_WIDTH/5,FIELD_HEIGHT*2/3), (FIELD_WIDTH/3, FIELD_HEIGHT/2))
+
+# strings
+GRENADE = "Grenade"
+
 
 # ---------------------- define classes
 class PhysicalObject:
@@ -160,7 +173,6 @@ class PhysicalObject:
                 self.v[1] = -self.v[1]
                 self.y = GOAL_BOTTOM - self.size
 
-
 class Player(PhysicalObject):
     hovered = False
     def __init__(self, x, y, color):
@@ -169,19 +181,36 @@ class Player(PhysicalObject):
     def draw(self, surf):
         super().draw(surf)
         if self.hovered:
-            pygame.draw.circle(surf, WHITE, (self.x, self.y), self.size, SELECTED_THICKNESS)
+            pygame.draw.circle(surf, WHITE, (self.x, self.y), self.size, width=SELECTED_THICKNESS)
 
 class Fragment(PhysicalObject):
     def __init__(self, x, y, mass, size, color):
         super().__init__(x, y, mass, size, color, "frag")
         self.spawnTime = pygame.time.get_ticks()
-
-    def updatePos(self):
-        #if self.size < MAX_FRAG_SIZE:
-        #    self.size += 1
-        super().updatePos()
         
-# ---------------------- define functions
+class Button:
+    def __init__(self, color, rect, name, img=None):
+        self.color = color
+        self.rect = rect
+        if img:
+            self.img = pygame.image.load(img)
+            assert self.img.get_width() == self.rect.width and self.img.get_height() == self.rect.height, "Image is wrong size for given Rect"
+        self.name = name
+
+        self.hovered = False
+        self.selected = False
+
+    def draw(self, surf):
+        rect = pygame.Rect(0, 0, ICON_SIZE, ICON_SIZE)
+        pygame.draw.rect(surf, self.color, rect, border_radius=8)
+        surf.blit(self.img, rect)
+
+        if self.hovered:
+            pygame.draw.rect(surf, WHITE, rect, width=SELECTED_THICKNESS, border_radius=8)
+        if self.selected:
+            pygame.draw.rect(surf, YELLOW, rect, width=SELECTED_THICKNESS, border_radius=8)
+
+#  ---------------------- define functions
 def distance(x1, y1, x2, y2):
     return np.sqrt( (x1-x2)**2 + (y1-y2)**2 )
 
@@ -197,6 +226,13 @@ def vectorToXY(magnitude, direction):
     x = np.cos(direction)*magnitude
     y = np.sin(direction)*magnitude
     return x, y
+
+def inField(x, y):
+    if (x > X_GAP and x < X_GAP+FIELD_WIDTH) and (y > Y_GAP and y < Y_GAP+FIELD_HEIGHT):
+        return True # main part of field
+    if (x > LEFT_GOAL_BACK and x < RIGHT_GOAL_BACK) and (y > GOAL_TOP and y < GOAL_BOTTOM):
+        return True # goals
+    return False
 
 def spawnGrenade(objects, x, y):
     for i in range(0, FRAG_COUNT):
@@ -228,6 +264,11 @@ def main():
 
     turn = BLUE
     nothingMoving = True
+
+    grenadeButton = Button(turn, pygame.Rect(SCREEN_WIDTH/2-ICON_SIZE, SCREEN_HEIGHT-Y_GAP/2-ICON_SIZE/2, ICON_SIZE, ICON_SIZE), GRENADE, img="buttons/grenade1.png")
+    buttons = [grenadeButton]
+    selectedButton, selectedButtonObj = None, None # first is for game loop, second is to set the button instance variable's selected = False once powerup is used
+    powerup = True
     while 1:
         # handle scored -----------------------
         # let it run until everything stops moving, then reset
@@ -258,9 +299,9 @@ def main():
                 pygame.quit()
                 sys.exit()
 
-            if event.type == pygame.locals.KEYDOWN:
-                if event.key == pygame.locals.K_a:
-                    spawnGrenade(objects, mouseX, mouseY)
+            # if event.type == pygame.locals.KEYDOWN:
+            #     if event.key == pygame.locals.K_a:
+            #         spawnGrenade(objects, mouseX, mouseY)
             
             
             if event.type == pygame.locals.MOUSEBUTTONDOWN and nothingMoving:
@@ -274,11 +315,31 @@ def main():
                             player.hovered = True # mark to draw the circle around it
                             selected = player
                             break
+                
+                # check for button click
+                if powerup:
+                    for button in buttons:
+                        if button.rect.collidepoint(mouseX, mouseY):
+                            if button.hovered: # click on hovered button = select/unselect the button
+                                button.selected = not button.selected
+                                if not button.selected:
+                                    selectedButton, selectedButtonObj = None, None
+                            if button.selected:
+                                selectedButton = button.name
+                                selectedButtonObj = button
             
             if event.type == pygame.locals.MOUSEBUTTONUP:
                 # on unclick, check if anything's selected
                 # if so, check if the cursor's outside the player
-                if selected and distance(mouseX, mouseY, selected.x, selected.y) > PLAYER_SIZE:
+                if powerup: # unnecessary (but just an extra check), as button cannot be clicked if powerup is False
+                    if selectedButton == GRENADE:
+                        if inField(mouseX, mouseY):
+                            spawnGrenade(objects, mouseX, mouseY)
+                            powerup = False
+                            selectedButtonObj.selected = False
+                            selectedButton, selectedButtonObj = None, None
+                # only handle player stuff if a powerup isn't selected
+                if (selectedButton is None) and (selected) and (distance(mouseX, mouseY, selected.x, selected.y) > PLAYER_SIZE):
                     # calculate drag distance, applying a slight tweak
                     vel = pygame.math.Vector2(-(mouseX-startingX)/AIM_TWEAK, -(mouseY-startingY)/AIM_TWEAK)
                     
@@ -295,6 +356,7 @@ def main():
                         turn = BLUE
                     else:
                         turn = RED
+                    powerup = True                    
                 # if not, unselect the thing
                 else:
                     player.hovered = False
@@ -340,7 +402,25 @@ def main():
         if selected:
             pygame.draw.line(DISPLAYSURF, WHITE, (selected.x, selected.y), (mouseX, mouseY), SELECTED_THICKNESS)
         
+        # draw buttons
+        for button in buttons:
+            buttonSurf = pygame.Surface((ICON_SIZE, ICON_SIZE), pygame.SRCALPHA)
+            buttonSurf.fill((0,0,0,0))
+            if not powerup:
+                buttonSurf.set_alpha(170)
+            button.color = turn
+            button.hovered = button.rect.collidepoint(mouseX, mouseY)
+            button.draw(buttonSurf)
+            DISPLAYSURF.blit(buttonSurf, (button.rect.left, button.rect.top))
+        
+        if selectedButton == GRENADE:
+            alphaSurf = pygame.Surface((GRENADE_SIZE*2, GRENADE_SIZE*2), pygame.SRCALPHA) # new surface to draw the transparency
+            pygame.draw.circle(alphaSurf, TRANSPARENT_BLACK, (GRENADE_SIZE, GRENADE_SIZE), GRENADE_SIZE)
+            DISPLAYSURF.blit(alphaSurf, (mouseX-GRENADE_SIZE, mouseY-GRENADE_SIZE))
+        
         # show turn
+        # blinks for a moment, fix:
+        # nothingMoving is true the frame when a player moves, even as the turn switches, so the new turn flashes before nothing shows bc there's movement
         if nothingMoving and not scored:
             if turn == BLUE:
                 turnText = scoreFont.render("Blue Turn", True, BLUE)
