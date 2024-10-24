@@ -13,9 +13,11 @@ GREEN = (0, 170, 0)
 BLUE = (0, 0, 255)
 RED = (255, 0, 0)
 WHITE = (255, 255, 255)
-YELLOW = (190, 190, 0)
+GOLD = (190, 190, 0)
 BLACK = (0, 0, 0)
+YELLOW = (210, 210, 0)
 TRANSPARENT_BLACK = (0, 0, 0, 185)
+TRANSPARENT_YELLOW = (210, 210, 0, 185)
 
 # game constants
 # field
@@ -32,6 +34,7 @@ RIGHT_GOAL_BACK = SCREEN_WIDTH-X_GAP+GOAL_DEPTH
 # ball
 BALL_MASS = 8
 BALL_SIZE = 10
+# player
 PLAYER_MASS = 30
 PLAYER_SIZE = 20
 # grenade powerup
@@ -41,12 +44,18 @@ FRAG_MASS = 15
 FRAG_SIZE = 3
 FRAG_VEL = FPS * 0.5
 FRAG_LIFETIME = 120 # milliseconds
+# glue powerup
+GLUE_SIZE = 50
+GLUE_FRICTION = 0.9
+GLUE_LIFE = 2 # rounds
 # physics
 MAX_VEL = FPS*0.2
 AIM_TWEAK = 10 # smaller number = less difference bt big aim and small aim
 FRICTION = 0.97
+FRICTION_COEFFICIENT = 0.15 # for collisions
 RESTITUTION = 0.8 # bounciness
 # buttons
+NUM_BUTTONS = 2
 ICON_SIZE = 64
 BUTTON_GAP = Y_GAP/2
 # misc
@@ -55,6 +64,7 @@ SPAWNS = ((FIELD_WIDTH/5, FIELD_HEIGHT/3), (FIELD_WIDTH/5,FIELD_HEIGHT*2/3), (FI
 
 # strings
 GRENADE = "Grenade"
+GLUE = "Glue"
 
 
 # ---------------------- define classes
@@ -73,11 +83,16 @@ class PhysicalObject:
     def draw(self, surf):
         pygame.draw.circle(surf, self.color, (self.x, self.y), self.size)
 
-    def updatePos(self):
+    def updatePos(self, glues=[]):
         self.x += self.v[0]
         self.y += self.v[1]
 
-        self.v *= FRICTION
+        friction = FRICTION
+        for glue in glues:
+            if distance(glue.x, glue.y, self.x,self.y) <= GLUE_SIZE+PLAYER_SIZE: # player is in glue
+                friction = GLUE_FRICTION # so they are frictioned more
+                break
+        self.v *= friction
 
         self.moving = np.linalg.norm(self.v) > 0.001
 
@@ -121,9 +136,8 @@ class PhysicalObject:
             other.v -= impulse / other.mass
             
             # Apply friction
-            friction_coefficient = 0.15  # You can adjust this value
             tangent = np.array([-normal[1], normal[0]])
-            friction_impulse_scalar = np.dot(relative_velocity, tangent) * friction_coefficient
+            friction_impulse_scalar = np.dot(relative_velocity, tangent) * FRICTION_COEFFICIENT
             friction_impulse_scalar /= 1/self.mass + 1/other.mass
             
             # Ensure friction doesn't reverse velocity
@@ -188,10 +202,22 @@ class Fragment(PhysicalObject):
         super().__init__(x, y, mass, size, color, "frag")
         self.spawnTime = pygame.time.get_ticks()
         
+class FieldObject:
+    def __init__ (self, x, y, size, color, lifetime=-1):
+        self.x = x
+        self.y = y
+        self.size = size
+        self.color = color
+        self.lifetime = lifetime
+    
+    def draw(self, surf):
+        pygame.draw.circle(surf, self.color, (self.x, self.y), self.size)
+
 class Button:
     def __init__(self, color, rect, name, img=None):
         self.color = color
         self.rect = rect
+        self.img = img
         if img:
             self.img = pygame.image.load(img)
             assert self.img.get_width() == self.rect.width and self.img.get_height() == self.rect.height, "Image is wrong size for given Rect"
@@ -203,12 +229,13 @@ class Button:
     def draw(self, surf):
         rect = pygame.Rect(0, 0, ICON_SIZE, ICON_SIZE)
         pygame.draw.rect(surf, self.color, rect, border_radius=8)
-        surf.blit(self.img, rect)
+        if self.img:
+            surf.blit(self.img, rect)
 
         if self.hovered:
             pygame.draw.rect(surf, WHITE, rect, width=SELECTED_THICKNESS, border_radius=8)
         if self.selected:
-            pygame.draw.rect(surf, YELLOW, rect, width=SELECTED_THICKNESS, border_radius=8)
+            pygame.draw.rect(surf, GOLD, rect, width=SELECTED_THICKNESS, border_radius=8)
 
 #  ---------------------- define functions
 def distance(x1, y1, x2, y2):
@@ -254,6 +281,7 @@ def main():
     scoreFont = pygame.font.SysFont("menlo", 30)
 
     objects = []
+    glues=[]
 
     blueScore = 0
     redScore = 0
@@ -265,8 +293,12 @@ def main():
     turn = BLUE
     nothingMoving = True
 
-    grenadeButton = Button(turn, pygame.Rect(SCREEN_WIDTH/2-ICON_SIZE, SCREEN_HEIGHT-Y_GAP/2-ICON_SIZE/2, ICON_SIZE, ICON_SIZE), GRENADE, img="buttons/grenade1.png")
-    buttons = [grenadeButton]
+    buttonsX = []
+    for i in range(NUM_BUTTONS):
+        buttonsX.append(BUTTON_GAP * (1+i) + ICON_SIZE*i)
+    grenadeButton = Button(turn, pygame.Rect(buttonsX[0], SCREEN_HEIGHT-Y_GAP/2-ICON_SIZE/2, ICON_SIZE, ICON_SIZE), GRENADE, img="buttons/grenade.png")
+    glueButton = Button(turn, pygame.Rect(buttonsX[1], SCREEN_HEIGHT-Y_GAP/2-ICON_SIZE/2, ICON_SIZE, ICON_SIZE), GLUE, img="buttons/glue.png")
+    buttons = [grenadeButton, glueButton]
     selectedButton, selectedButtonObj = None, None # first is for game loop, second is to set the button instance variable's selected = False once powerup is used
     powerup = True
     while 1:
@@ -321,12 +353,13 @@ def main():
                     for button in buttons:
                         if button.rect.collidepoint(mouseX, mouseY):
                             if button.hovered: # click on hovered button = select/unselect the button
-                                button.selected = not button.selected
-                                if not button.selected:
+                                if button.selected:
+                                    button.selected = False
                                     selectedButton, selectedButtonObj = None, None
-                            if button.selected:
-                                selectedButton = button.name
-                                selectedButtonObj = button
+                                elif selectedButton is None:
+                                    button.selected = True
+                                    selectedButton = button.name
+                                    selectedButtonObj = button
             
             if event.type == pygame.locals.MOUSEBUTTONUP:
                 # on unclick, check if anything's selected
@@ -338,6 +371,13 @@ def main():
                             powerup = False
                             selectedButtonObj.selected = False
                             selectedButton, selectedButtonObj = None, None
+                    if selectedButton == GLUE:
+                        if inField(mouseX, mouseY):
+                            glues.append(FieldObject(mouseX, mouseY, GLUE_SIZE, YELLOW, lifetime = GLUE_LIFE))
+                            powerup = False
+                            selectedButtonObj.selected = False
+                            selectedButton, selectedButtonObj = None, None
+                
                 # only handle player stuff if a powerup isn't selected
                 if (selectedButton is None) and (selected) and (distance(mouseX, mouseY, selected.x, selected.y) > PLAYER_SIZE):
                     # calculate drag distance, applying a slight tweak
@@ -352,11 +392,17 @@ def main():
                     player.hovered = False
                     selected = None
 
+                    # swap turns, new round
                     if turn == RED:
                         turn = BLUE
                     else:
                         turn = RED
                     powerup = True                    
+                    for glue in glues:
+                        glue.lifetime -=1
+                        if glue.lifetime == 0:
+                            glues.remove(glue)
+
                 # if not, unselect the thing
                 else:
                     player.hovered = False
@@ -369,9 +415,8 @@ def main():
         for obj in objects:
             if obj.moving:
                 nothingMoving = False
-            # update twice to handle goal corners
             obj.handleWallCollision()
-            obj.updatePos()
+            obj.updatePos(glues)
 
             if (obj.type == "frag"):
                 #if (not obj.moving):
@@ -380,8 +425,7 @@ def main():
         
         for frag in fragsToRemove:
             objects.remove(frag)
-
-
+        
         pairs = [(a, b) for i, a in enumerate(objects) for b in objects[i+1:]]
         for i in range(2):
             for obj1, obj2 in pairs:
@@ -393,10 +437,12 @@ def main():
         pygame.draw.rect(DISPLAYSURF, WHITE, pygame.Rect(X_GAP, Y_GAP, FIELD_WIDTH, FIELD_HEIGHT), 1) # field lines
         pygame.draw.rect(DISPLAYSURF, BLUE, pygame.Rect(LEFT_GOAL_BACK, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT), 1) # left goal
         pygame.draw.rect(DISPLAYSURF, RED, pygame.Rect(X_GAP+FIELD_WIDTH, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT), 1) # right goal
-        pygame.draw.line(DISPLAYSURF, YELLOW, (X_GAP, GOAL_TOP), (X_GAP, GOAL_BOTTOM), 4) # left goal line
-        pygame.draw.line(DISPLAYSURF, YELLOW, (X_GAP+FIELD_WIDTH, GOAL_TOP), (X_GAP+FIELD_WIDTH, GOAL_BOTTOM), 4) # right goal line
+        pygame.draw.line(DISPLAYSURF, GOLD, (X_GAP, GOAL_TOP), (X_GAP, GOAL_BOTTOM), 4) # left goal line
+        pygame.draw.line(DISPLAYSURF, GOLD, (X_GAP+FIELD_WIDTH, GOAL_TOP), (X_GAP+FIELD_WIDTH, GOAL_BOTTOM), 4) # right goal line
         
         # draw objects
+        for glue in glues:
+            glue.draw(DISPLAYSURF)
         for obj in objects:
             obj.draw(DISPLAYSURF)
         if selected:
@@ -413,10 +459,18 @@ def main():
             button.draw(buttonSurf)
             DISPLAYSURF.blit(buttonSurf, (button.rect.left, button.rect.top))
         
+        if selectedButton is not None:
+            buttonText = scoreFont.render(selectedButton, True, turn)
+            buttonTextRect = buttonText.get_rect(midbottom=(SCREEN_WIDTH/2, Y_GAP))
+            DISPLAYSURF.blit(buttonText, buttonTextRect)
         if selectedButton == GRENADE:
             alphaSurf = pygame.Surface((GRENADE_SIZE*2, GRENADE_SIZE*2), pygame.SRCALPHA) # new surface to draw the transparency
             pygame.draw.circle(alphaSurf, TRANSPARENT_BLACK, (GRENADE_SIZE, GRENADE_SIZE), GRENADE_SIZE)
             DISPLAYSURF.blit(alphaSurf, (mouseX-GRENADE_SIZE, mouseY-GRENADE_SIZE))
+        if selectedButton == GLUE:
+            alphaSurf = pygame.Surface((GLUE_SIZE*2, GLUE_SIZE*2), pygame.SRCALPHA)
+            pygame.draw.circle(alphaSurf, TRANSPARENT_YELLOW, (GLUE_SIZE, GLUE_SIZE), GLUE_SIZE)
+            DISPLAYSURF.blit(alphaSurf, (mouseX-GLUE_SIZE, mouseY-GLUE_SIZE))
         
         # show turn
         # blinks for a moment, fix:
