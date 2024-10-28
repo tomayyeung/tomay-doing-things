@@ -47,7 +47,7 @@ FRAG_LIFETIME = 120 # milliseconds
 # glue powerup
 GLUE_SIZE = 50
 GLUE_FRICTION = 0.9
-GLUE_LIFE = 2 # rounds
+GLUE_LIFE = 3 # rounds - is removed the moment the 3rd round begins (player moves)
 # physics
 MAX_VEL = FPS*0.2
 AIM_TWEAK = 10 # smaller number = less difference bt big aim and small aim
@@ -58,6 +58,8 @@ RESTITUTION = 0.8 # bounciness
 NUM_BUTTONS = 2
 ICON_SIZE = 64
 BUTTON_GAP = Y_GAP/2
+BUTTON_Y = SCREEN_HEIGHT-Y_GAP/2-ICON_SIZE/2
+BUTTON_RECT = pygame.Rect(0, 0, ICON_SIZE, ICON_SIZE) # for powerups, drawn on a different surface
 # misc
 SELECTED_THICKNESS = 5
 SPAWNS = ((FIELD_WIDTH/5, FIELD_HEIGHT/3), (FIELD_WIDTH/5,FIELD_HEIGHT*2/3), (FIELD_WIDTH/3, FIELD_HEIGHT/2))
@@ -226,16 +228,39 @@ class Button:
         self.hovered = False
         self.selected = False
 
-    def draw(self, surf):
-        rect = pygame.Rect(0, 0, ICON_SIZE, ICON_SIZE)
-        pygame.draw.rect(surf, self.color, rect, border_radius=8)
-        if self.img:
-            surf.blit(self.img, rect)
+    def draw(self, surf, drawRect=None):
+        if drawRect is None:
+            drawRect = self.rect
+        pygame.draw.rect(surf, self.color, drawRect, border_radius=8)
+        # if self.img:
+        #     surf.blit(self.img, drawRect)
 
         if self.hovered:
-            pygame.draw.rect(surf, WHITE, rect, width=SELECTED_THICKNESS, border_radius=8)
+            pygame.draw.rect(surf, WHITE, drawRect, width=SELECTED_THICKNESS, border_radius=8)
         if self.selected:
-            pygame.draw.rect(surf, GOLD, rect, width=SELECTED_THICKNESS, border_radius=8)
+            pygame.draw.rect(surf, GOLD, drawRect, width=SELECTED_THICKNESS, border_radius=8)
+
+class PowerupButton(Button):
+    def __init__(self, rect, name, img):
+        self.rect = rect
+        self.name = name
+        self.img = pygame.image.load(img)
+        assert self.img.get_width() == self.rect.width and self.img.get_height() == self.rect.height, "Image is wrong size for given Rect"
+
+        self.color = BLUE
+
+        self.hovered = False
+        self.selected = False
+   
+    def draw(self, surf, powerupAvailable=True):
+        buttonSurf = pygame.Surface((ICON_SIZE, ICON_SIZE), pygame.SRCALPHA)
+        buttonSurf.fill((0,0,0,0))
+        if not powerupAvailable: # if powerup isn't available, "grey out" the icon
+            buttonSurf.set_alpha(170)
+
+        super().draw(buttonSurf, drawRect=BUTTON_RECT) # draw button rectangle
+        buttonSurf.blit(self.img, BUTTON_RECT)
+        surf.blit(buttonSurf, (self.rect.left, self.rect.top))
 
 #  ---------------------- define functions
 def distance(x1, y1, x2, y2):
@@ -296,8 +321,10 @@ def main():
     buttonsX = []
     for i in range(NUM_BUTTONS):
         buttonsX.append(BUTTON_GAP * (1+i) + ICON_SIZE*i)
-    grenadeButton = Button(turn, pygame.Rect(buttonsX[0], SCREEN_HEIGHT-Y_GAP/2-ICON_SIZE/2, ICON_SIZE, ICON_SIZE), GRENADE, img="buttons/grenade.png")
-    glueButton = Button(turn, pygame.Rect(buttonsX[1], SCREEN_HEIGHT-Y_GAP/2-ICON_SIZE/2, ICON_SIZE, ICON_SIZE), GLUE, img="buttons/glue.png")
+    #grenadeButton = Button(turn, pygame.Rect(buttonsX[0], SCREEN_HEIGHT-Y_GAP/2-ICON_SIZE/2, ICON_SIZE, ICON_SIZE), GRENADE, img="buttons/grenade.png")
+    grenadeButton = PowerupButton(pygame.Rect(buttonsX[0], BUTTON_Y, ICON_SIZE, ICON_SIZE), GRENADE, "buttons/grenade.png")
+    #glueButton = Button(turn, pygame.Rect(buttonsX[1], SCREEN_HEIGHT-Y_GAP/2-ICON_SIZE/2, ICON_SIZE, ICON_SIZE), GLUE, img="buttons/glue.png")
+    glueButton = PowerupButton(pygame.Rect(buttonsX[1], BUTTON_Y, ICON_SIZE, ICON_SIZE), GLUE, "buttons/glue.png")
     buttons = [grenadeButton, glueButton]
     selectedButton, selectedButtonObj = None, None # first is for game loop, second is to set the button instance variable's selected = False once powerup is used
     powerup = True
@@ -432,7 +459,7 @@ def main():
                 if distance(obj1.x, obj1.y, obj2.x, obj2.y) <= obj1.size+obj2.size:
                     obj1.handleCollision(obj2)
         
-        # display -----------------------
+        # display ----------------------------
         DISPLAYSURF.fill(GREEN)
         pygame.draw.rect(DISPLAYSURF, WHITE, pygame.Rect(X_GAP, Y_GAP, FIELD_WIDTH, FIELD_HEIGHT), 1) # field lines
         pygame.draw.rect(DISPLAYSURF, BLUE, pygame.Rect(LEFT_GOAL_BACK, GOAL_TOP, GOAL_DEPTH, GOAL_HEIGHT), 1) # left goal
@@ -440,7 +467,7 @@ def main():
         pygame.draw.line(DISPLAYSURF, GOLD, (X_GAP, GOAL_TOP), (X_GAP, GOAL_BOTTOM), 4) # left goal line
         pygame.draw.line(DISPLAYSURF, GOLD, (X_GAP+FIELD_WIDTH, GOAL_TOP), (X_GAP+FIELD_WIDTH, GOAL_BOTTOM), 4) # right goal line
         
-        # draw objects
+        # draw objects ----------------
         for glue in glues:
             glue.draw(DISPLAYSURF)
         for obj in objects:
@@ -448,16 +475,16 @@ def main():
         if selected:
             pygame.draw.line(DISPLAYSURF, WHITE, (selected.x, selected.y), (mouseX, mouseY), SELECTED_THICKNESS)
         
-        # draw buttons
+        # draw buttons ----------------
         for button in buttons:
-            buttonSurf = pygame.Surface((ICON_SIZE, ICON_SIZE), pygame.SRCALPHA)
-            buttonSurf.fill((0,0,0,0))
-            if not powerup:
-                buttonSurf.set_alpha(170)
+            # buttonSurf = pygame.Surface((ICON_SIZE, ICON_SIZE), pygame.SRCALPHA)
+            # buttonSurf.fill((0,0,0,0))
+            # if not powerup:
+            #     buttonSurf.set_alpha(170)
             button.color = turn
             button.hovered = button.rect.collidepoint(mouseX, mouseY)
-            button.draw(buttonSurf)
-            DISPLAYSURF.blit(buttonSurf, (button.rect.left, button.rect.top))
+            button.draw(DISPLAYSURF, powerupAvailable=powerup)
+            # DISPLAYSURF.blit(buttonSurf, (button.rect.left, button.rect.top))
         
         if selectedButton is not None:
             buttonText = scoreFont.render(selectedButton, True, turn)
@@ -472,7 +499,7 @@ def main():
             pygame.draw.circle(alphaSurf, TRANSPARENT_YELLOW, (GLUE_SIZE, GLUE_SIZE), GLUE_SIZE)
             DISPLAYSURF.blit(alphaSurf, (mouseX-GLUE_SIZE, mouseY-GLUE_SIZE))
         
-        # show turn
+        # show turn ----------------
         # blinks for a moment, fix:
         # nothingMoving is true the frame when a player moves, even as the turn switches, so the new turn flashes before nothing shows bc there's movement
         if nothingMoving and not scored:
@@ -483,7 +510,7 @@ def main():
             turnTextRect = turnText.get_rect(midtop=(SCREEN_WIDTH/2, 0))
             DISPLAYSURF.blit(turnText, turnTextRect)
             
-        # detect for scoring
+        # detect for scoring ----------------
         if (ball.x < X_GAP and not scored):
             displayText = displayFont.render("RED SCORE", True, WHITE)
             displayTextRect = displayText.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
@@ -502,7 +529,7 @@ def main():
         if scored and pygame.time.get_ticks() - scoreTime < 5000: # keep SCORED text on 5 seconds after score
             DISPLAYSURF.blit(displayText, displayTextRect)
 
-        # show score for blue & red
+        # show score for blue & red ----------------
         DISPLAYSURF.blit(scoreFont.render("Blue score: " + str(blueScore), True, BLUE), (0,0))
         redScoreText = scoreFont.render("Red score: " + str(redScore), True, RED)
         redScoreRect = redScoreText.get_rect(topright = (SCREEN_WIDTH, 0))
