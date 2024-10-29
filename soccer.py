@@ -63,6 +63,7 @@ BUTTON_RECT = pygame.Rect(0, 0, ICON_SIZE, ICON_SIZE) # for powerups, drawn on a
 # misc
 SELECTED_THICKNESS = 5
 SPAWNS = ((FIELD_WIDTH/5, FIELD_HEIGHT/3), (FIELD_WIDTH/5,FIELD_HEIGHT*2/3), (FIELD_WIDTH/3, FIELD_HEIGHT/2))
+WIN_SCORE = 1
 
 # strings
 GRENADE = "Grenade"
@@ -309,11 +310,6 @@ def main():
 
     # initialize game
     objects = []
-    glues=[]
-
-    blueScore = 0
-    redScore = 0
-    scored = True # start at True to set inital object positions
 
     selected = None
     startingX, startingY = 0,0
@@ -348,7 +344,15 @@ def main():
         DISPLAYSURF.blit(titleText, titleRect)
         playButton.draw(DISPLAYSURF)
         pygame.display.update()
+        clock.tick(FPS)
 
+        # reset game variables -----------
+        glues = []
+
+        scored = True # start at True to set inital object positions   
+        blueScore = 0
+        redScore = 0
+        win = False
         while gameLoop:
             # handle scored -----------------------
             # let it run until everything stops moving, then reset
@@ -359,7 +363,7 @@ def main():
                         stoppedMoving = False
                         break
                 
-                if stoppedMoving:
+                if stoppedMoving and not win:
                     ball = PhysicalObject(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, BALL_MASS, BALL_SIZE, WHITE)
                     objects = [ball]
                     for spawn in SPAWNS:
@@ -524,22 +528,32 @@ def main():
                 
             # detect for scoring ----------------
             if (ball.x < X_GAP and not scored):
-                displayText = displayFont.render("RED SCORE", True, RED)
-                displayTextRect = displayText.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
                 redScore += 1
                 scored = True
+                if (redScore >= WIN_SCORE):
+                    displayText = displayFont.render("RED WINS", True, RED)
+                    win = True
+                else:
+                    displayText = displayFont.render("RED SCORE", True, RED)
+                displayTextRect = displayText.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
                 scoreTime = pygame.time.get_ticks()
                 turn = BLUE
             if (ball.x > X_GAP+FIELD_WIDTH and not scored):
-                displayText = displayFont.render("BLUE SCORE", True, BLUE)
-                displayTextRect = displayText.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
                 blueScore += 1
                 scored = True
+                if (blueScore >= WIN_SCORE):
+                    displayText = displayFont.render("BLUE WINS", True, BLUE)
+                    win = True
+                else:
+                    displayText = displayFont.render("BLUE SCORE", True, BLUE)
+                displayTextRect = displayText.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
                 turn = RED
                 scoreTime = pygame.time.get_ticks()
             
             if scored and pygame.time.get_ticks() - scoreTime < 5000: # keep SCORED text on 5 seconds after score
                 DISPLAYSURF.blit(displayText, displayTextRect)
+            if win and pygame.time.get_ticks() - scoreTime > 5000:
+                gameLoop = False # after win, leave after 5 seconds
 
             # show score for blue & red ----------------
             DISPLAYSURF.blit(scoreFont.render("Blue score: " + str(blueScore), True, BLUE), (0,0))
@@ -553,4 +567,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
