@@ -9,8 +9,8 @@ This is my repo for random projects I have in Python. Feel free to take a look a
 - Powerups
   - Grenade
   - Glue
+- Menu screen
 - To add:
   - Appearance customization
   - Powerup to make one player heavier for a round
-  - Menu screen
   - Powerup charging
