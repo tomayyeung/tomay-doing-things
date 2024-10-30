@@ -8,6 +8,12 @@ SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 FPS = 60
 
+# text
+DISPLAY_SIZE = 80
+INFO_SIZE = 35
+SCORE_SIZE = 30
+TITLE_SIZE = 160
+
 # colors
 GREEN = (0, 170, 0)
 BLUE = (0, 0, 255)
@@ -40,9 +46,9 @@ PLAYER_SIZE = 20
 # grenade powerup
 GRENADE_SIZE = 15 # during powerup select
 FRAG_COUNT = 16
-FRAG_MASS = 15
+FRAG_MASS = 40
 FRAG_SIZE = 3
-FRAG_VEL = FPS * 0.5
+FRAG_VEL = FPS * 0.25
 FRAG_LIFETIME = 120 # milliseconds
 # glue powerup
 GLUE_SIZE = 50
@@ -216,6 +222,22 @@ class FieldObject:
     def draw(self, surf: pygame.Surface):
         pygame.draw.circle(surf, self.color, (self.x, self.y), self.size)
 
+class MenuButton:
+    def __init__(self, color: tuple, center: tuple, img: str):
+        self.color = color
+        self.center = center
+        self.img = pygame.image.load(img)
+        self.rect = pygame.Rect(self.center[0]-ICON_SIZE/2, self.center[1]-ICON_SIZE/2, ICON_SIZE, ICON_SIZE)
+
+        self.hovered = False
+    
+    def draw(self, surf: pygame.Surface):
+        pygame.draw.circle(surf, self.color, self.center, ICON_SIZE/2)
+        surf.blit(self.img, self.rect)
+
+        if self.hovered:
+            pygame.draw.circle(surf, WHITE, self.center, ICON_SIZE/2, width = SELECTED_THICKNESS)
+
 class Button:
     def __init__(self, color: tuple, rect: pygame.Rect):
         self.color = color
@@ -292,6 +314,40 @@ def spawnGrenade(objects: list, x: int, y: int):
         
         objects.append(frag)
 
+def infoDisplay(DISPLAYSURF: pygame.Surface, font: pygame.font, clock: pygame.time.Clock, info: Button):
+    # display info until user exits back to menu
+    while 1:
+        mouseX, mouseY = pygame.mouse.get_pos()
+        for event in pygame.event.get():
+            if event.type == pygame.locals.QUIT:
+                pygame.quit()
+                sys.exit()
+            
+            if event.type == pygame.locals.MOUSEBUTTONUP:
+                if info.hovered: # info button is back button
+                    return
+        info.hovered = distance(info.center[0], info.center[1], mouseX, mouseY) <= ICON_SIZE/2        
+        
+        infoText = '''
+        Welcome to Soccer!\nDrag and release pieces to launch them.\nOne powerup per turn.\n
+        Grenade sets off an explosive,\nlaunching nearby objects\nGlue makes an area sticky for a round.\n
+        Try to get the ball in your opponent's goal.\nFirst to 3 goals wins.\nGood luck!
+        '''
+        infoLines = infoText.split("\n")
+
+        DISPLAYSURF.fill(GREEN)
+        for i in range(len(infoLines)): # display each line of text in its own line
+            text = font.render(infoLines[i], True, WHITE)
+            textRect = text.get_rect(midtop = (SCREEN_WIDTH/2, INFO_SIZE/2+INFO_SIZE*i))
+            DISPLAYSURF.blit(text, textRect)
+        info.draw(DISPLAYSURF)
+
+        pygame.display.update()
+        clock.tick(FPS)
+
+def gameLoop(DISPLAYSURF: pygame.Surface):
+    pass
+
 def main():
     # initialize pygame
     pygame.init()
@@ -300,13 +356,16 @@ def main():
     pygame.display.set_caption("Soccer")
     clock = pygame.time.Clock()
     pygame.font.init()
-    displayFont = pygame.font.SysFont("krungthep", 80)
-    scoreFont = pygame.font.SysFont("menlo", 30)
-    titleFont = pygame.font.SysFont("bradleyhand", 160)
+    displayFont = pygame.font.SysFont("krungthep", DISPLAY_SIZE)
+    infoFont = pygame.font.SysFont("kefa", INFO_SIZE)
+    scoreFont = pygame.font.SysFont("menlo", SCORE_SIZE)
+    titleFont = pygame.font.SysFont("bradleyhand", TITLE_SIZE)
 
     titleText = titleFont.render("Soccer", True, WHITE)
     titleRect = titleText.get_rect(midtop=(SCREEN_WIDTH/2,0))
     playButton = TextButton(GOLD, "Play", displayFont, WHITE)
+
+    infoButton = MenuButton(GOLD, (SCREEN_WIDTH-ICON_SIZE, SCREEN_HEIGHT-ICON_SIZE), "buttons/info.png")
 
     # initialize game
     objects = []
@@ -337,12 +396,16 @@ def main():
             if event.type == pygame.locals.MOUSEBUTTONUP:
                 if playButton.hovered:
                     gameLoop = True
+                if infoButton.hovered:
+                    infoDisplay(DISPLAYSURF, infoFont, clock, infoButton)
         
         playButton.hovered = playButton.rect.collidepoint(mouseX, mouseY)
+        infoButton.hovered = distance(infoButton.center[0], infoButton.center[1], mouseX, mouseY) <= ICON_SIZE/2
 
         DISPLAYSURF.fill(GREEN)
         DISPLAYSURF.blit(titleText, titleRect)
         playButton.draw(DISPLAYSURF)
+        infoButton.draw(DISPLAYSURF)
         pygame.display.update()
         clock.tick(FPS)
 
@@ -536,8 +599,9 @@ def main():
                 else:
                     displayText = displayFont.render("RED SCORE", True, RED)
                 displayTextRect = displayText.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
-                scoreTime = pygame.time.get_ticks()
                 turn = BLUE
+                powerup = False
+                scoreTime = pygame.time.get_ticks()
             if (ball.x > X_GAP+FIELD_WIDTH and not scored):
                 blueScore += 1
                 scored = True
@@ -548,6 +612,7 @@ def main():
                     displayText = displayFont.render("BLUE SCORE", True, BLUE)
                 displayTextRect = displayText.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
                 turn = RED
+                powerup = False
                 scoreTime = pygame.time.get_ticks()
             
             if scored and pygame.time.get_ticks() - scoreTime < 5000: # keep SCORED text on 5 seconds after score
